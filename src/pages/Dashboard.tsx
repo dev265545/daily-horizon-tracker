@@ -1,17 +1,25 @@
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { useItems, useEmployees, useProductions, useAdvances, useDeductions } from "@/hooks/useData";
-import { today, getPeriodForDate, dateDisplay } from "@/lib/dateUtils";
+import { useItems, useEmployees, useProductions, useDayOffs } from "@/hooks/useData";
+import { today, getPeriodForDate } from "@/lib/dateUtils";
 import { currency, formatNumber } from "@/lib/format";
-import { getAll, STORES, type Production, type Item } from "@/lib/db";
+import { getAll, STORES, type Production, type Advance, type AdvanceDeduction } from "@/lib/db";
 import { Eye, Package, IndianRupee, Users } from "lucide-react";
+import DashboardCalendar from "@/components/DashboardCalendar";
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const now = new Date();
+  const [calYear, setCalYear] = useState(now.getFullYear());
+  const [calMonth, setCalMonth] = useState(now.getMonth());
   const [date, setDate] = useState(today());
   const { items } = useItems();
   const { employees } = useEmployees(true);
   const period = useMemo(() => getPeriodForDate(date), [date]);
+  const { dayOffs, addDayOff, removeDayOff } = useDayOffs();
+
+  // All productions for calendar
+  const [allProductions, setAllProductions] = useState<Production[]>([]);
 
   // Daily aggregation
   const [dailyData, setDailyData] = useState<{ name: string; dayQty: number; nightQty: number; qty: number; value: number }[]>([]);
@@ -21,6 +29,7 @@ const Dashboard = () => {
   useEffect(() => {
     (async () => {
       const allProds = await getAll<Production>(STORES.PRODUCTIONS);
+      setAllProductions(allProds);
       const dayProds = allProds.filter((p) => p.date === date);
       const itemMap = Object.fromEntries(items.map((i) => [i.id, i]));
       const totals: Record<string, number> = {};
@@ -51,16 +60,23 @@ const Dashboard = () => {
   const [quickItem, setQuickItem] = useState("");
   const [quickShift, setQuickShift] = useState<"day" | "night">("day");
   const [quickQty, setQuickQty] = useState(1);
-  const [quickDate, setQuickDate] = useState(today());
   const { addProduction } = useProductions();
 
   const handleQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickEmp || !quickItem) return;
-    await addProduction({ employeeId: quickEmp, itemId: quickItem, date: quickDate, quantity: quickQty, shift: quickShift });
+    await addProduction({ employeeId: quickEmp, itemId: quickItem, date, quantity: quickQty, shift: quickShift });
     setQuickQty(1);
-    // Refresh daily
-    setDate((d) => d); // trigger re-render
+    setDate((d) => d);
+  };
+
+  const handleToggleDayOff = async (d: string) => {
+    const exists = dayOffs.find((o) => o.date === d);
+    if (exists) {
+      await removeDayOff(d);
+    } else {
+      await addDayOff(d, "Day off");
+    }
   };
 
   // Salary summary
@@ -69,8 +85,8 @@ const Dashboard = () => {
   useEffect(() => {
     (async () => {
       const allProds = await getAll<Production>(STORES.PRODUCTIONS);
-      const allAdvances = await getAll<import("@/lib/db").Advance>(STORES.ADVANCES);
-      const allDeductions = await getAll<import("@/lib/db").AdvanceDeduction>(STORES.ADVANCE_DEDUCTIONS);
+      const allAdvances = await getAll<Advance>(STORES.ADVANCES);
+      const allDeductions = await getAll<AdvanceDeduction>(STORES.ADVANCE_DEDUCTIONS);
       const itemMap = Object.fromEntries(items.map((i) => [i.id, i]));
 
       const rows = employees.map((emp) => {
@@ -86,20 +102,14 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="page-title">Dashboard</h1>
-        <div className="flex items-center gap-3">
-          <label className="form-label mb-0">Date</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="form-input" />
-        </div>
-      </div>
+      <h1 className="page-title">Dashboard</h1>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="stat-card">
           <div className="flex items-center gap-3 mb-2">
             <Package className="w-5 h-5 text-primary" />
-            <span className="text-sm font-medium text-muted-foreground">Production today</span>
+            <span className="text-sm font-medium text-muted-foreground">Production — {date}</span>
           </div>
           <p className="text-3xl font-bold font-heading text-foreground">{formatNumber(totalQty)}</p>
         </div>
@@ -119,42 +129,57 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Daily production */}
-      <div className="section-card">
-        <h2 className="section-title mb-4">Daily production by item</h2>
-        {dailyData.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4">No production for this date.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b-2 border-border">
-                  <th className="table-header">Item</th>
-                  <th className="table-header text-right">Day</th>
-                  <th className="table-header text-right">Night</th>
-                  <th className="table-header text-right">Total</th>
-                  <th className="table-header text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dailyData.map((r, i) => (
-                  <tr key={i} className="table-row">
-                    <td className="table-cell">{r.name}</td>
-                    <td className="table-cell text-right">{formatNumber(r.dayQty)}</td>
-                    <td className="table-cell text-right">{formatNumber(r.nightQty)}</td>
-                    <td className="table-cell text-right font-medium">{formatNumber(r.qty)}</td>
-                    <td className="table-cell text-right">{currency(r.value)}</td>
+      {/* Calendar + daily production side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <DashboardCalendar
+          year={calYear}
+          month={calMonth}
+          onMonthChange={(y, m) => { setCalYear(y); setCalMonth(m); }}
+          productions={allProductions}
+          dayOffs={dayOffs}
+          employees={employees}
+          selectedDate={date}
+          onDateClick={setDate}
+          onToggleDayOff={handleToggleDayOff}
+        />
+
+        {/* Daily production */}
+        <div className="section-card">
+          <h2 className="section-title mb-4">Production — {date}</h2>
+          {dailyData.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">No production for this date.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b-2 border-border">
+                    <th className="table-header">Item</th>
+                    <th className="table-header text-right">Day</th>
+                    <th className="table-header text-right">Night</th>
+                    <th className="table-header text-right">Total</th>
+                    <th className="table-header text-right">Value</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {dailyData.map((r, i) => (
+                    <tr key={i} className="table-row">
+                      <td className="table-cell">{r.name}</td>
+                      <td className="table-cell text-right">{formatNumber(r.dayQty)}</td>
+                      <td className="table-cell text-right">{formatNumber(r.nightQty)}</td>
+                      <td className="table-cell text-right font-medium">{formatNumber(r.qty)}</td>
+                      <td className="table-cell text-right">{currency(r.value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Quick add */}
       <div className="section-card">
-        <h2 className="section-title mb-4">Quick add production</h2>
+        <h2 className="section-title mb-4">Quick add production — {date}</h2>
         <form onSubmit={handleQuickAdd} className="flex flex-wrap gap-3 items-end">
           <div>
             <label className="form-label">Employee</label>
@@ -180,10 +205,6 @@ const Dashboard = () => {
           <div>
             <label className="form-label">Qty</label>
             <input type="number" min="1" value={quickQty} onChange={(e) => setQuickQty(parseInt(e.target.value) || 1)} className="form-input w-20" />
-          </div>
-          <div>
-            <label className="form-label">Date</label>
-            <input type="date" value={quickDate} onChange={(e) => setQuickDate(e.target.value)} className="form-input" />
           </div>
           <button type="submit" className="btn-primary">Add</button>
         </form>
