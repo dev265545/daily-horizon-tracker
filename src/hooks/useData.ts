@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   getAll, get, put, remove, STORES, uid,
   type Item, type Employee, type Production, type Advance, type AdvanceDeduction,
+  type Attendance, type DayOff, type ShiftType,
 } from "@/lib/db";
 
 // Items
@@ -43,11 +44,15 @@ export function useEmployees(activeOnly = false) {
     await refresh();
     return emp;
   };
+  const updateEmployee = async (emp: Employee) => {
+    await put(STORES.EMPLOYEES, emp);
+    await refresh();
+  };
   const deleteEmployee = async (id: string) => {
     await remove(STORES.EMPLOYEES, id);
     await refresh();
   };
-  return { employees, loading, refresh, addEmployee, deleteEmployee };
+  return { employees, loading, refresh, addEmployee, updateEmployee, deleteEmployee };
 }
 
 // Productions
@@ -115,6 +120,50 @@ export function useDeductions(employeeId?: string) {
     return record;
   };
   return { deductions, refresh, saveDeduction };
+}
+
+// Attendance
+export function useAttendance(employeeId?: string) {
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const refresh = useCallback(async () => {
+    const all = await getAll<Attendance>(STORES.ATTENDANCE);
+    setAttendance(employeeId ? all.filter((a) => a.employeeId === employeeId) : all);
+  }, [employeeId]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const setAttendanceStatus = async (empId: string, date: string, status: "present" | "absent") => {
+    const id = `att_${empId}_${date}`;
+    const record: Attendance = { id, employeeId: empId, date, status };
+    await put(STORES.ATTENDANCE, record);
+    await refresh();
+  };
+  const removeAttendance = async (empId: string, date: string) => {
+    const id = `att_${empId}_${date}`;
+    await remove(STORES.ATTENDANCE, id);
+    await refresh();
+  };
+  return { attendance, refresh, setAttendanceStatus, removeAttendance };
+}
+
+// Day Offs
+export function useDayOffs() {
+  const [dayOffs, setDayOffs] = useState<DayOff[]>([]);
+  const refresh = useCallback(async () => {
+    const all = await getAll<DayOff>(STORES.DAY_OFFS);
+    setDayOffs(all);
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  const addDayOff = async (date: string, reason?: string) => {
+    const id = `off_${date}`;
+    const record: DayOff = { id, date, reason };
+    await put(STORES.DAY_OFFS, record);
+    await refresh();
+  };
+  const removeDayOff = async (date: string) => {
+    const id = `off_${date}`;
+    await remove(STORES.DAY_OFFS, id);
+    await refresh();
+  };
+  return { dayOffs, refresh, addDayOff, removeDayOff };
 }
 
 // Single employee fetch
