@@ -1,7 +1,7 @@
 // IndexedDB wrapper for ProdTrack
 
 const DB_NAME = "prodtrack-db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const STORES = {
   ITEMS: "items",
@@ -9,6 +9,8 @@ export const STORES = {
   PRODUCTIONS: "productions",
   ADVANCES: "advances",
   ADVANCE_DEDUCTIONS: "advance_deductions",
+  ATTENDANCE: "attendance",
+  DAY_OFFS: "day_offs",
 } as const;
 
 let dbInstance: IDBDatabase | null = null;
@@ -36,6 +38,16 @@ function createSchema(db: IDBDatabase) {
     const dedStore = db.createObjectStore(STORES.ADVANCE_DEDUCTIONS, { keyPath: "id" });
     dedStore.createIndex("by_employee", "employeeId", { unique: false });
     dedStore.createIndex("employee_period", ["employeeId", "periodFrom"], { unique: true });
+  }
+  if (!db.objectStoreNames.contains(STORES.ATTENDANCE)) {
+    const attStore = db.createObjectStore(STORES.ATTENDANCE, { keyPath: "id" });
+    attStore.createIndex("by_employee", "employeeId", { unique: false });
+    attStore.createIndex("by_date", "date", { unique: false });
+    attStore.createIndex("employee_date", ["employeeId", "date"], { unique: true });
+  }
+  if (!db.objectStoreNames.contains(STORES.DAY_OFFS)) {
+    const offStore = db.createObjectStore(STORES.DAY_OFFS, { keyPath: "id" });
+    offStore.createIndex("by_date", "date", { unique: true });
   }
 }
 
@@ -113,7 +125,7 @@ export function clearStore(storeName: string): Promise<void> {
   });
 }
 
-// Export/Import
+// Types
 export interface ExportData {
   version: number;
   schemaVersion: number;
@@ -124,6 +136,8 @@ export interface ExportData {
     productions: Production[];
     advances: Advance[];
     advance_deductions: AdvanceDeduction[];
+    attendance?: Attendance[];
+    day_offs?: DayOff[];
   };
 }
 
@@ -137,7 +151,17 @@ export interface Employee {
   id: string;
   name: string;
   isActive: boolean;
+  shift?: ShiftType;
+  monthlySalary?: number;
 }
+
+export type ShiftType = "8AM-8PM" | "9AM-8PM" | "9AM-7PM";
+
+export const SHIFT_HOURS: Record<ShiftType, number> = {
+  "8AM-8PM": 12,
+  "9AM-8PM": 11,
+  "9AM-7PM": 10,
+};
 
 export interface Production {
   id: string;
@@ -163,19 +187,34 @@ export interface AdvanceDeduction {
   amount: number;
 }
 
+export interface Attendance {
+  id: string;
+  employeeId: string;
+  date: string;
+  status: "present" | "absent";
+}
+
+export interface DayOff {
+  id: string;
+  date: string;
+  reason?: string;
+}
+
 export async function exportDatabase(): Promise<ExportData> {
-  const [items, employees, productions, advances, deductions] = await Promise.all([
+  const [items, employees, productions, advances, deductions, attendance, dayOffs] = await Promise.all([
     getAll<Item>(STORES.ITEMS),
     getAll<Employee>(STORES.EMPLOYEES),
     getAll<Production>(STORES.PRODUCTIONS),
     getAll<Advance>(STORES.ADVANCES),
     getAll<AdvanceDeduction>(STORES.ADVANCE_DEDUCTIONS),
+    getAll<Attendance>(STORES.ATTENDANCE),
+    getAll<DayOff>(STORES.DAY_OFFS),
   ]);
   return {
     version: 1,
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt: new Date().toISOString(),
-    stores: { items, employees, productions, advances, advance_deductions: deductions },
+    stores: { items, employees, productions, advances, advance_deductions: deductions, attendance, day_offs: dayOffs },
   };
 }
 
@@ -187,6 +226,8 @@ export async function importDatabase(data: ExportData): Promise<void> {
   for (const prod of data.stores.productions || []) ops.push(put(STORES.PRODUCTIONS, prod));
   for (const adv of data.stores.advances || []) ops.push(put(STORES.ADVANCES, adv));
   for (const ded of data.stores.advance_deductions || []) ops.push(put(STORES.ADVANCE_DEDUCTIONS, ded));
+  for (const att of data.stores.attendance || []) ops.push(put(STORES.ATTENDANCE, att));
+  for (const off of data.stores.day_offs || []) ops.push(put(STORES.DAY_OFFS, off));
   await Promise.all(ops);
 }
 
